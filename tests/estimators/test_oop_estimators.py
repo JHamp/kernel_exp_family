@@ -19,6 +19,7 @@ def get_instace_KernelExpLiteGaussian(N):
     D = 2
     return KernelExpLiteGaussian(sigma, lmbda, D, N)
 
+
 def get_estimator_instances(N):
     return [
             get_instace_KernelExpFiniteGaussian(N),
