@@ -5,6 +5,7 @@ from math import pi
 import spams
 import numpy as np
 
+from kernel_exp_family.kernels.kernels import gaussian_kernel
 from kernel_exp_family.estimators.estimator_oop import EstimatorBase
 from kernel_exp_family.estimators.lite.gaussian_low_rank import KernelExpLiteGaussianLowRank
 from kernel_exp_family.examples.tools import visualise_fit_2d
@@ -32,8 +33,6 @@ def visualise_array(Xs, Ys, A, samples=None):
 def compute_submatrix(X,allomega,allu,i_row,j_row,i_col,j_col):
     N = X.shape[0]
     m = allu.shape[2]
-        #if i_row ==j_row or i_col ==j_col:
-         #   return np.zeros((m,m))
         
         
         
@@ -82,23 +81,24 @@ def compute_submatrix(X,allomega,allu,i_row,j_row,i_col,j_col):
 
 #computes submatrices and puts them together to whole C-matrix
 def compute_C(X, allomega, allu):
-    N = X.shape[0]
     d = X.shape[1]
     m = allu.shape[2] 
-    size = (d*(d+1)/2) * m
+    N = X.shape[0]
+    size = (d*(d-1)/2) * m
     C = np.zeros((size, size)) + np.nan
     for i_row in range(d):
-        for j_row in range(i_row,d):
-            row = d*i_row-(i_row-1)*(i_row)/2 + j_row-i_row # row in d^2 meta matrix
+        for j_row in range(i_row+1,d):
+            row = d*i_row-(i_row+1)*(i_row)/2 + j_row-i_row-1 # row in d^2 meta matrix
             for i_col in range(d):              
-                for j_col in range(i_col,d):
-                    col = d*i_col-(i_col-1)*(i_col)/2 + j_col-i_col # col in d^2 meta matrix
+                for j_col in range(i_col+1,d):
+                    col = d*i_col-(i_col+1)*(i_col)/2 + j_col-i_col-1 # col in d^2 meta matrix
                     if col>row:
                         continue
                     submat = compute_submatrix(X, allomega, allu, i_row,j_row,i_col,j_col)
                     C[row*m:row*m+m, col*m:col*m+m] = submat
                     if row != col:
                         C[col*m:col*m+m, row*m:row*m+m] = submat.T
+    C =C +0.1*np.eye(size)
     return C
 
 #computes $b_{(i,j)}$`s and puts them together to b-vector
@@ -106,28 +106,90 @@ def compute_b(X, allomega, allu):
     N = X.shape[0]
     d = X.shape[1]
     m = allu.shape[2] 
-    size = (d*(d+1)/2) * m
+    size = (d*(d-1)/2) * m
     b = np.zeros(size)+ np.nan
     for i in range(d):
-        for j in range(i,d):
+        for j in range(i+1,d):
             XH = (X[:, np.array([i,j])])
             omegaH = (allomega[i,j,:,:])
             uH =(allu[i,j,:])
+            
+            Phi1 = np.dot(XH,omegaH)+uH
+            np.sin(Phi1, Phi1)
+            Phi1 *= -np.sqrt(2. / m) 
+            
+            
             Phi2 = rff_feature_map(XH, omegaH, uH)
 
-            projections_sum = np.zeros(m)         
+            projections_sum = np.zeros(m)   
             for k in range(2):
+                bandwidth = (4.0/3.0/N)**(1.0/5.0)
+                estimate_var = np.var(XH[:,k])    
                 projections_sum += np.mean(-Phi2 * (omegaH[k, :] ** 2), axis=0) 
+                
+                #print for comparison
+                LGD1 = XH[:,k].reshape(-1,1)/estimate_var
+                LGD2 = learn_1d_log_grad(XH[:,k],XH[:,k],bandwidth).reshape(-1,1)
+                print "true log gradient density", LGD1[1:10]
+                print "learned log gradient density", LGD2[1:10]
+
+                #use this if you know that all marginal densities are gaussian
+                projections_sum += (np.mean(-Phi1*omegaH[k, :] * LGD1, axis=0))
+                
+                #use this for KDE 
+                #projections_sum += (np.mean(-Phi1*omegaH[k, :] * LGD2, axis=0))
+                
+
+                
             phi = -projections_sum
-            b[m*(d*i-(i-1)*(i)/2 + j-i):m*(d*i-(i-1)*(i)/2 + j-i)+m] = phi
+            b[m*(d*i-(i+1)*(i)/2 + j-i-1):m*(d*i-(i+1)*(i)/2 + j-i-1)+m] = phi
     return b
+
+def learn_1d_density(Y,X,bandwidth):#Y:evaluate on Y, X: data
+    X = X.reshape(-1,1)
+    Y = Y.reshape(-1,1)
+    K = gaussian_kernel(Y,X,bandwidth)
+    est_dens = np.mean((K), axis=1)
+
+    return est_dens
+
+
+def learn_1d_gradient(Y, X, bandwidth): #Y:evaluate on Y, X: data
+    Y = Y.reshape(-1,1)
+
+    X = X.reshape(-1,1)
+    
+
+    k = gaussian_kernel(Y, X, bandwidth)
+
+    
+    Yh = np.repeat(Y, len(X),axis = 1)
+    Xh = np.repeat(X, len(Y),axis = 1)
+
+
+    differences = -Yh.T+Xh
+
+    G = (2.0 / bandwidth) * (np.dot(k ,differences))
+    G = np.diag(G)/len(X)
+    return -G
+
+def learn_1d_log_grad(Y,X,bandwidth):#Y:evaluate on Y, X: data
+    Y = Y.reshape(-1,1)
+    X = X.reshape(-1,1)
+
+    D = learn_1d_density(Y,X,bandwidth)
+    G = learn_1d_gradient(Y, X, bandwidth)
+    
+    
+    LG = G/D
+    return LG
 
 #turn b from long vector into array
 def compute_allb(b,d,m):
     allb = np.zeros((d,d,m))
     counter = 0
     for i in range(d):  
-        for j in range(i,d):
+        for j in range(i+1,d):
             allb[i,j,:] = b[counter*m: counter*m+m]
             counter += 1
     return allb
@@ -137,7 +199,7 @@ def compute_allC(C,d,m):
     allC = np.zeros((d,d,m,m))
     counter = 0
     for i in range(d):  
-        for j in range(i,d):
+        for j in range(i+1,d):
             allC[i,j,:,:] = C[counter*m: counter*m+m, counter*m: counter*m+m]
             counter += 1
     return allC
@@ -147,7 +209,7 @@ def compute_alltheta(theta,d,m):
     alltheta = np.zeros((d,d,m))
     counter = 0
     for i in range(d):  
-        for j in range(i,d):
+        for j in range(i+1,d):
             alltheta[i,j,:] = theta[counter*m: counter*m+m]
             counter += 1
     return alltheta  
@@ -164,14 +226,14 @@ def log_pdf_gradient_2d(x, theta, omega,u):
 
 # extracts C_((1,2),(1,2)) for a simple test
 #just for tests
-def extract_simple_C(C,m,d):
-    simple_C = C[m:2*m, m:2*m]
+def extract_simple_C(C,m,d): #just for tests
+    simple_C = C[0:m, 0:m]
     return simple_C
 
 # extracts b_(1,2) for a simple test
 # just for tests
-def extract_simple_b(b,m,d):
-    simple_b = b[m:2*m]
+def extract_simple_b(b,m,d): #just for tests
+    simple_b = b[0:m]
     return simple_b
 
 # solves Y = w^t X , given groupstructure as vector G and regularisation parameter lam    
@@ -279,7 +341,7 @@ def visualise_fit_structured_densities_two_dimensions(X, alltheta,allomega,allu,
 
 # creates groupstructure so that each theta_(i,j) is one group
 def create_groupstructure(d,m):
-    G1 = np.arange(1, 1+ d*(d+1)/2)
+    G1 = np.arange(1, 1+ d*(d-1)/2)
     G = np.repeat(G1,m)
     return G
 
@@ -394,7 +456,7 @@ def crossvalidate_objective(Xmat,sigma, lam,m): #Xmat: CN*N*d-matrix
     
     
 
-class KernelExpStructuredGaussian(EstimatorBase):
+class KernelExpStructuredGaussianMarginals(EstimatorBase):
     def __init__(self,m,sigma,lam):
         self.m = m
         self.sigma =sigma  

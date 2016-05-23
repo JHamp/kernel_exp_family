@@ -2,7 +2,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-from kernel_exp_family.estimators.structured_densities.gaussian import KernelExpStructuredGaussian
+from kernel_exp_family.estimators.structured_densities.gaussian_with_marginals import KernelExpStructuredGaussianMarginals
 from kernel_exp_family.examples.tools import visualise_fit_2d
 
 N = 200
@@ -24,7 +24,7 @@ for i in range(1,CN):
 sigma = 2
 lmbda = 0.01
 m = N
-est = KernelExpStructuredGaussian(m,sigma, lmbda)
+est = KernelExpStructuredGaussianMarginals(m,sigma, lmbda)
 
 est.fit(X)
 
